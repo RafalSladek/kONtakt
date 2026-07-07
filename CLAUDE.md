@@ -81,14 +81,21 @@ All user data is stored **client-side only**:
 
 **Root cause:** `kwiatuczuc.pl` DNS record is a Cloudflare-proxied (orange-cloud) CNAME to `rafalsladek.github.io`. Because it's proxied, GitHub Pages' cert-renewal watchdog sees Cloudflare's rotating anycast IPs on lookup and repeatedly flags the domain as `dns_changed`, resetting its own Let's Encrypt renewal before it completes. Confirm current state: `gh api repos/RafalSladek/KwiatUczuc/pages` → check `https_certificate.state`/`expires_at`. This is structural, not a one-time misconfig — it recurs.
 
-**Current mitigation (temporary):** Cloudflare zone `dc8bc18da9480ee2133c5cd73a23017b` SSL/TLS mode set to **Full** (not Full-strict) — encrypts edge↔origin hop but skips origin cert validation, so requests succeed even while GH's cert is expired/reissuing. Visitor↔edge leg unaffected (valid Cloudflare cert). Acceptable risk for this project — static, no backend, no secrets — but weaker than Full-strict.
+**Status: RESOLVED (2026-07-07).** Both `kwiatuczuc.pl` and `www.kwiatuczuc.pl` CNAME records grey-clouded (`proxied: false`) in Cloudflare zone `dc8bc18da9480ee2133c5cd73a23017b`. GH Pages now resolves directly; its own Let's Encrypt cert renews on schedule without Cloudflare-proxy interference. Cloudflare SSL/TLS mode no longer relevant — Cloudflare isn't in the request path for this domain.
 
-**Permanent fix — not yet done, pick one:**
-1. **(Recommended)** Grey-cloud the DNS record (Cloudflare dash → DNS → toggle proxy off on the `kwiatuczuc.pl` CNAME) so GH Pages resolves directly and its own Let's Encrypt renews on schedule without interference. Loses Cloudflare CDN/WAF/DDoS layer — acceptable for a static, no-backend site.
-2. Migrate hosting from GitHub Pages to Cloudflare Pages — keeps the proxy/CDN, cert lifecycle becomes fully Cloudflare-managed so Full-strict works permanently. Bigger change: updates deploy flow and this doc's "Deployed via" section.
-3. Do nothing further — stay on Full mode indefinitely, accept the reduced edge↔origin trust.
+**Trade-off accepted:** no Cloudflare CDN/WAF/DDoS/analytics on `kwiatuczuc.pl` right now — DNS-only, traffic hits GH Pages directly.
 
-Cloudflare API token available in this environment can read zone/DNS state but lacks `zone_settings:edit` — SSL mode and proxy toggle changes require the dashboard.
+**Next step — optional, not yet done: restore Cloudflare's edge features via Worker reverse-proxy.**
+Diagram: https://claude.ai/code/artifact/c44e56e2-8785-4ad4-8139-a64d7baa449c
+
+- Create a Worker (e.g. `kwiatuczuc-proxy`) bound to Custom Domain `kwiatuczuc.pl`/`www.kwiatuczuc.pl`. Handler `fetch()`-passes every request through to `https://rafalsladek.github.io/...` (rewrite `Host`, pass path/query through) and returns the response.
+- This decouples the two cert lifecycles: visitor↔edge cert becomes Cloudflare's own Worker Custom Domain cert (auto-renews, no GH dependency); Worker↔origin leg hits GH's own `github.io` domain (always-valid GH wildcard cert, unrelated to the custom-domain bug that caused the original 526).
+- Restores full CDN/WAF/caching/analytics/DDoS protection. Zero change to deploy flow (`git push main` → GH Pages auto-build stays as-is).
+- Re-enabling the Cloudflare proxy (orange-cloud) *without* this Worker in front would reintroduce the original bug — don't flip proxy back on for the raw CNAME.
+
+Other options considered and rejected for now: re-proxy + permanent SSL mode Full (quick but leaves edge↔origin cert validation off indefinitely); full migration to Cloudflare Pages/Workers static assets (cleanest but changes the deploy pipeline away from GH Pages).
+
+Cloudflare API token available in this environment (via `cloudflare-api` plugin, `execute`/`search`/`docs` tools) can read zone/DNS state but lacks `zone_settings:edit` — SSL mode toggles still require the dashboard. Worker creation/Custom Domain binding should be doable via the API/`wrangler` when this step is picked up.
 
 ## Pre-Commit Checklist
 
