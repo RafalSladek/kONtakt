@@ -4,10 +4,10 @@
 
 **Kwiat Uczuć** is an evening emotional ritual PWA for families. Single-page app, single HTML file, no build step.
 
-**Live app:** https://kwiatuczuc.pl/ (mirror: https://rafalsladek.github.io/kONtakt/)
-**Repo:** https://github.com/RafalSladek/kONtakt
+**Live app:** https://kwiatuczuc.pl/ (mirror: https://rafalsladek.github.io/KwiatUczuc/)
+**Repo:** https://github.com/RafalSladek/KwiatUczuc (renamed from `kONtakt`)
 **Deployed via:** GitHub Pages from `main` branch, root `/`
-**Custom domain:** `kwiatuczuc.pl` via Cloudflare DNS → CNAME file in repo
+**Custom domain:** `kwiatuczuc.pl` via Cloudflare DNS (proxied CNAME → `rafalsladek.github.io`) → GitHub Pages
 
 ## Architecture
 
@@ -25,18 +25,18 @@ Single-file app — all HTML, CSS, and JS live in `index.html`:
 
 ## Screens
 
-- **Screen 1** — Emotion wheel: 7 core emotions from the Feelings Wheel (Dr. Gloria Willcox) arranged in a circle, with toggle to flower layout. Users can add custom emotions.
-- **Screen 2** — Pie chart: shows last 7 entries as a pie chart with emotion colors.
+- **Screen 1** — Emotion wheel: 7 core emotions from the Feelings Wheel (Dr. Gloria Willcox) arranged in a circle, with toggle to flower layout. Multi-select emotions (`selectEmo()`), confirm with "confirmBtn" to save today's entry. Rotating prompt text above the wheel (`cycleQuestion()`) cycles through 5 phrasings every 6s. Users can add custom emotions.
+- **Screen 2** — Pie chart (`renderPie()`): period selector — dziś/wczoraj/tydzień/2 tyg/4 tyg (`setPeriod()`) — aggregates entries in the selected window into a pie chart with emotion colors.
 
 ## Data Storage
 
 All user data is stored **client-side only**:
 
-- `kwiatuczuc_entries` — JSON array of `{date, emotions[]}` entries
+- `kwiatuczuc_entries` — JSON array of `{date, emotions[]}` entries (one entry per day; `confirmSelection()` overwrites today's entry if it already exists)
 - `kwiatuczuc_custom` — JSON array of custom emotion names
 - `kwiatuczuc_theme` — `"pastel"` (default) or `"dark"`
 - `kwiatuczuc_last_vote` — date string of last vote (shows pie chart on revisit)
-- `kwiatuczuc_layout` — `"circle"` (default) or `"flower"`
+- `kwiatuczuc_layout` — `"circle"` or `"flower"` (default)
 - `kwiatuczuc_reminder` — reminder time (HH:MM), `"skipped"`, or `"denied"`
 - No backend, no sync, no accounts
 - Migration from old `kontakt_` prefix runs automatically on load
@@ -54,6 +54,11 @@ All user data is stored **client-side only**:
 - **Emotions shuffled**: `renderWheel()` shuffles baseEmotions on each render
 - **Date**: `today()` returns `YYYY-MM-DD` via `toISOString().slice(0,10)`
 
+## PWA
+
+- `manifest.json` + `sw.js` — service worker registered at `index.html:1270` (`/sw.js`)
+- Cache strategy: network-first for navigation (HTML), cache-first for other assets; bump `CACHE` version string in `sw.js` when shipping changes that must bust old caches
+
 ## Development Notes
 
 - No build tooling — edit `index.html` directly, changes are immediately deployable
@@ -61,6 +66,7 @@ All user data is stored **client-side only**:
 - Do not use `git push --force` on main
 - Google Fonts loaded non-blocking (preconnect + preload)
 - No `user-scalable=no` in viewport
+- `package.json`/`package-lock.json`/`node_modules/` are gitignored — not part of the repo. To run the scripts below, `npm init -y && npm install playwright` locally first (one-time, untracked)
 
 ## Scripts
 
@@ -68,6 +74,21 @@ All user data is stored **client-side only**:
 - `node scripts/screenshots.js --device iphonese` — single device
 - `node scripts/gif.js` — generate user-journey.gif (requires ffmpeg)
 - `node scripts/gif.js --device desktop --fps 4` — custom options
+
+## Known Infrastructure Issue — GH Pages cert vs Cloudflare proxy
+
+**Symptom:** site returns Cloudflare **526 (Invalid SSL Certificate)**.
+
+**Root cause:** `kwiatuczuc.pl` DNS record is a Cloudflare-proxied (orange-cloud) CNAME to `rafalsladek.github.io`. Because it's proxied, GitHub Pages' cert-renewal watchdog sees Cloudflare's rotating anycast IPs on lookup and repeatedly flags the domain as `dns_changed`, resetting its own Let's Encrypt renewal before it completes. Confirm current state: `gh api repos/RafalSladek/KwiatUczuc/pages` → check `https_certificate.state`/`expires_at`. This is structural, not a one-time misconfig — it recurs.
+
+**Current mitigation (temporary):** Cloudflare zone `dc8bc18da9480ee2133c5cd73a23017b` SSL/TLS mode set to **Full** (not Full-strict) — encrypts edge↔origin hop but skips origin cert validation, so requests succeed even while GH's cert is expired/reissuing. Visitor↔edge leg unaffected (valid Cloudflare cert). Acceptable risk for this project — static, no backend, no secrets — but weaker than Full-strict.
+
+**Permanent fix — not yet done, pick one:**
+1. **(Recommended)** Grey-cloud the DNS record (Cloudflare dash → DNS → toggle proxy off on the `kwiatuczuc.pl` CNAME) so GH Pages resolves directly and its own Let's Encrypt renews on schedule without interference. Loses Cloudflare CDN/WAF/DDoS layer — acceptable for a static, no-backend site.
+2. Migrate hosting from GitHub Pages to Cloudflare Pages — keeps the proxy/CDN, cert lifecycle becomes fully Cloudflare-managed so Full-strict works permanently. Bigger change: updates deploy flow and this doc's "Deployed via" section.
+3. Do nothing further — stay on Full mode indefinitely, accept the reduced edge↔origin trust.
+
+Cloudflare API token available in this environment can read zone/DNS state but lacks `zone_settings:edit` — SSL mode and proxy toggle changes require the dashboard.
 
 ## Pre-Commit Checklist
 
